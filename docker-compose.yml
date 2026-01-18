@@ -2,10 +2,11 @@ version: '2.4'
 
 services:
   octoprint:
-    image: octoprint/octoprint
+    image: my/octoprint
     restart: unless-stopped
     ports:
       - 80:80
+      - 8080:80 #exposing port for Obico
     # devices:
     # use `python -m serial.tools.miniterm` to see what the name is of the printer, this requires pyserial
     #  - /dev/ttyACM0:/dev/ttyACM0

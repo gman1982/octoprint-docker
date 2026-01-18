@@ -1,22 +1,22 @@
-ARG PYTHON_BASE_IMAGE=3.10-slim-bullseye
+ARG PYTHON_BASE_IMAGE=3.10.19-slim-bookworm
 
 FROM ubuntu AS s6build
 ARG S6_RELEASE
-ENV S6_VERSION ${S6_RELEASE:-v2.1.0.0}
+ENV S6_VERSION ${S6_RELEASE:-v3.2.1.0}
 RUN apt-get update && apt-get install -y curl
 RUN echo "$(dpkg --print-architecture)"
 WORKDIR /tmp
 RUN ARCH= && dpkgArch="$(dpkg --print-architecture)" \
   && case "${dpkgArch##*-}" in \
-  amd64) ARCH='amd64';; \
+  amd64) ARCH='x86_64';; \
   arm64) ARCH='aarch64';; \
   armhf) ARCH='armhf';; \
   *) echo "unsupported architecture: $(dpkg --print-architecture)"; exit 1 ;; \
   esac \
   && set -ex \
   && echo $S6_VERSION \
-  && curl -fsSLO "https://github.com/just-containers/s6-overlay/releases/download/$S6_VERSION/s6-overlay-$ARCH.tar.gz"
-
+  && curl -fsSLO "https://github.com/just-containers/s6-overlay/releases/download/$S6_VERSION/s6-overlay-$ARCH.tar.xz" \ 
+  && curl -fsSLO "https://github.com/just-containers/s6-overlay/releases/download/v3.2.1.0/s6-overlay-noarch.tar.xz"
 
 FROM python:${PYTHON_BASE_IMAGE} AS build
 
@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
   g++ \
   git \
   haproxy \
+  janus \
   libffi-dev \
   libjpeg-dev \
   libjpeg62-turbo \
@@ -49,12 +50,15 @@ RUN apt-get update && apt-get install -y \
 
 # unpack s6
 COPY --from=s6build /tmp /tmp
-RUN s6tar=$(find /tmp -name "s6-overlay-*.tar.gz") \
-  && tar xzf $s6tar -C / 
+RUN s6tar=$(find /tmp -name "s6-overlay-noarch.tar.xz") \
+  && tar -C / -Jxpf $s6tar  && rm $s6tar
+RUN s6tar=$(find /tmp -name "s6-overlay-*.tar.xz") \
+  && tar -C / -Jxpf $s6tar  
 
+RUN /bin/bash
 # Install octoprint
 RUN	curl -fsSLO --compressed --retry 3 --retry-delay 10 \
-  https://github.com/OctoPrint/OctoPrint/archive/${octoprint_ref}.tar.gz \
+  "https://github.com/OctoPrint/OctoPrint/archive/${octoprint_ref}.tar.gz" \
 	&& mkdir -p /opt/octoprint \
   && tar xzf ${octoprint_ref}.tar.gz --strip-components 1 -C /opt/octoprint --no-same-owner
 
@@ -64,7 +68,7 @@ RUN mkdir -p /octoprint/octoprint /octoprint/plugins
 
 # Install mjpg-streamer
 RUN curl -fsSLO --compressed --retry 3 --retry-delay 10 \
-  https://github.com/jacksonliam/mjpg-streamer/archive/master.tar.gz \
+  "https://github.com/jacksonliam/mjpg-streamer/archive/master.tar.gz" \
   && mkdir /mjpg \
   && tar xzf master.tar.gz -C /mjpg
 
@@ -72,6 +76,19 @@ RUN curl -fsSLO --compressed --retry 3 --retry-delay 10 \
 WORKDIR /mjpg/mjpg-streamer-master/mjpg-streamer-experimental
 RUN make
 RUN make install
+RUN chmod +x /*/run
+
+# Correction for new S6 version
+RUN ln -s /command/with-contenv /usr/bin/with-contenv
+RUN ln -s /command/execlineb /usr/bin/execlineb
+
+RUN mkdir /etc/fix-attrs.d/
+RUN chown 0755 /etc/fix-attrs.d/
+
+RUN echo "/etc/services.d/haproxy true root,0:0 0755 0755" >> /etc/fix-attrs.d/octoprint
+RUN echo "/etc/services.d/mjpg-streamer true root,0:0 0755 0755"  >> /etc/fix-attrs.d/octoprint
+RUN echo "/etc/services.d/octoprint true root,0:0 0755 0755"  >> /etc/fix-attrs.d/octoprint
+
 
 # Copy services into s6 servicedir and set default ENV vars
 COPY root /
